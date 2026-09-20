@@ -1,0 +1,15 @@
+# Environment & Local Secrets (NEVER COMMIT)
+.env
+.streamlit/secrets.toml
+.streamlit/secrets.toml.bak
+
+# Runtime Private App Directory (NEVER commit downloaded private code)
+_lariviere_app/
+.runtime_cache/
+
+# Python artifacts & caches
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.pytest_cache/

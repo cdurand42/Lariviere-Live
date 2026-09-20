@@ -1,0 +1,5 @@
+streamlit==1.62.0
+google-genai
+python-pptx
+requests
+pytest
