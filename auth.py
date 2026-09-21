@@ -199,22 +199,37 @@ def hide_sidebar() -> None:
 
 
 def render_header_session() -> None:
-    """Render subtle session status and logout button in the top page header."""
+    """Render visible session status and logout button in the top page header."""
     hide_sidebar()
-    c_info, c_btn = st.columns([5, 1.2])
+    st.markdown(
+        """
+        <style>
+            /* Ensure main container has sufficient top padding to clear Streamlit header toolbar */
+            [data-testid="stMainBlockContainer"] {
+                padding-top: 4.5rem !important;
+            }
+            .st-key-btn_logout button {
+                border-radius: 8px !important;
+                font-weight: 600 !important;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+    c_info, c_btn = st.columns([4.5, 1.5])
     with c_info:
         current_user = html.escape(str(st.session_state.get("username", "Utilisateur")))
         st.markdown(
             f"""
-            <div style="display: flex; align-items: center; height: 38px; color: #64748b; font-size: 0.84rem;">
-                <span style="display: inline-block; width: 7px; height: 7px; background-color: #10b981; border-radius: 50%; margin-right: 7px;"></span>
-                <span>Session : <strong style="color: #1e293b;">{current_user}</strong></span>
+            <div style="display: flex; align-items: center; height: 38px; color: #475569; font-size: 0.88rem;">
+                <span style="display: inline-block; width: 8px; height: 8px; background-color: #10b981; border-radius: 50%; margin-right: 8px;"></span>
+                <span>Session active : <strong style="color: #0f172a;">{current_user}</strong></span>
             </div>
             """,
             unsafe_allow_html=True,
         )
     with c_btn:
-        if st.button("Déconnexion", key="btn_logout", help="Fermer la session", use_container_width=True):
+        if st.button("Déconnexion", key="btn_logout", help="Se déconnecter du portail", use_container_width=True):
             logout()
             st.rerun()
 

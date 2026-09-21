@@ -187,6 +187,12 @@ def test_render_header_session_renders_without_sidebar():
         args, kwargs = mock_st.button.call_args
         assert "Déconnexion" in args or kwargs.get("key") == "btn_logout"
 
+        # Ensure container top padding CSS is injected to clear header toolbar
+        markdown_calls = [c[0][0] for c in mock_st.markdown.call_args_list if c[0]]
+        css_calls = [c for c in markdown_calls if '[data-testid="stMainBlockContainer"]' in c]
+        assert len(css_calls) >= 1
+        assert "padding-top" in css_calls[0]
+
 
 def test_logout_resets_session_state():
     """logout must reset authentication and clear session keys."""
