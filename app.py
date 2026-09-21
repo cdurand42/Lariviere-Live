@@ -6,7 +6,7 @@ Strictly PUBLIC-SAFE:
 - Requires USER + PASSWORD authentication (PBKDF2-HMAC-SHA256, 600k iterations).
 - Dynamically loads and runs private LariviereAI code strictly AFTER authentication.
 - Calls st.set_page_config() once safely at portal root.
-- Provides session state management with sidebar logout.
+- Suppresses Streamlit sidebar completely (discrete header session & logout).
 """
 
 from __future__ import annotations
@@ -14,10 +14,11 @@ from __future__ import annotations
 import streamlit as st
 
 from auth import (
+    hide_sidebar,
     is_auth_configured,
     is_authenticated,
+    render_header_session,
     render_login_form,
-    render_sidebar_session,
 )
 from loader import load_and_run_lariviere
 
@@ -30,7 +31,9 @@ def main() -> None:
         page_title="Éditions Larivière · AI Partnership · ZCube",
         page_icon="◼",
         layout="centered",
+        initial_sidebar_state="collapsed",
     )
+    hide_sidebar()
 
     # ---------------------------------------------------------
     # GATE 1: Security Configuration Check (Fail-Closed)
@@ -51,9 +54,9 @@ def main() -> None:
         st.stop()
 
     # ---------------------------------------------------------
-    # Authenticated Session: Sidebar Session & Logout Controls
+    # Authenticated Session: Header Session & Logout Controls
     # ---------------------------------------------------------
-    render_sidebar_session()
+    render_header_session()
 
     # ---------------------------------------------------------
     # GATE 3: Secure Execution of Larivière AI Application

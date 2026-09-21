@@ -8,7 +8,10 @@ import pytest
 
 from auth import (
     generate_password_hash,
+    hide_sidebar,
     is_auth_configured,
+    logout,
+    render_header_session,
     verify_credentials,
     verify_password_hash,
 )
@@ -150,3 +153,53 @@ def test_resolve_local_sibling():
     resolved = resolve_private_app_path()
     assert os.path.exists(resolved)
     assert os.path.exists(os.path.join(resolved, "app.py"))
+
+
+def test_hide_sidebar_suppresses_sidebar_elements():
+    """hide_sidebar must inject CSS to hide stSidebar, collapsedControl, and nav."""
+    mock_st = MagicMock()
+    with patch("auth.st", mock_st):
+        hide_sidebar()
+        mock_st.markdown.assert_called_once()
+        css_payload = mock_st.markdown.call_args[0][0]
+        assert '[data-testid="stSidebar"]' in css_payload
+        assert '[data-testid="collapsedControl"]' in css_payload
+        assert "display: none !important" in css_payload
+
+
+def test_render_header_session_renders_without_sidebar():
+    """render_header_session must render in header columns and NEVER access st.sidebar."""
+    mock_st = MagicMock()
+    col1, col2 = MagicMock(), MagicMock()
+    mock_st.columns.return_value = (col1, col2)
+    mock_st.session_state = {"authenticated": True, "username": "admin_user"}
+    mock_st.button.return_value = False
+
+    with patch("auth.st", mock_st):
+        render_header_session()
+
+        # st.sidebar must NEVER be used
+        mock_st.sidebar.assert_not_called()
+        # st.columns must be used for layout
+        mock_st.columns.assert_called_once()
+        # st.button for logout must be present
+        mock_st.button.assert_called_once()
+        args, kwargs = mock_st.button.call_args
+        assert "Déconnexion" in args or kwargs.get("key") == "btn_logout"
+
+
+def test_logout_resets_session_state():
+    """logout must reset authentication and clear session keys."""
+    mock_st = MagicMock()
+    session_dict = {
+        "authenticated": True,
+        "username": "admin_user",
+        "private_app_data": {"brief": "123"},
+    }
+    mock_st.session_state = session_dict
+    with patch("auth.st", mock_st):
+        logout()
+        assert session_dict["authenticated"] is False
+        assert "username" not in session_dict
+        assert "private_app_data" not in session_dict
+

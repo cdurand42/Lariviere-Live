@@ -22,7 +22,7 @@ Navigateur utilisateur
 │  - Hachage PBKDF2-HMAC-SHA256 (600 000 it, sel 16 o)   │
 │  - Comparaison en temps constant (hmac.compare_digest) │
 │  - Aucun mot de passe en clair toléré                  │
-│  - Session authentifiée + Déconnexion (sidebar)        │
+│  - Session authentifiée + Déconnexion (en-tête discret) │
 │  - Fail-closed si credentials absents                  │
 │                                                        │
 │  [ CHARGEUR DYNAMIQUE SÉCURISÉ ]                       │
@@ -53,7 +53,7 @@ Navigateur utilisateur
    - Il est utilisé en mémoire vive dans l'en-tête `Authorization: Bearer <token>` de la requête HTTPS REST API GitHub.
    - Les logs et messages d'erreur masquent automatiquement la valeur du jeton.
 4. **Dérivation cryptographique robuste** : PBKDF2-HMAC-SHA256 avec 600 000 itérations et sel aléatoire de 16 octets.
-5. **Gestion de session et déconnexion** : Bouton de déconnexion dans la barre latérale réinitialisant intégralement la session.
+5. **Gestion de session et déconnexion** : Bouton de déconnexion discret dans l'en-tête réinitialisant intégralement la session (sidebar Streamlit masquée).
 6. **Optimisation runtime** : L'archive n'est téléchargée qu'une seule fois par cycle de vie de conteneur, évitant tout ralentissement ou dépassement de quota d'API.
 
 ---

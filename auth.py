@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import hashlib
 import hmac
+import html
 import os
 import secrets
 from typing import Optional
@@ -174,15 +175,52 @@ def render_login_form() -> None:
                         st.error(err_msg or "Identifiants invalides.")
 
 
-def render_sidebar_session() -> None:
-    """Render session status and logout button in the sidebar."""
-    with st.sidebar:
-        st.markdown("### Session")
-        current_user = st.session_state.get("username", "Utilisateur")
-        st.caption(f"Connecté : **{current_user}**")
-        if st.button("Déconnexion", use_container_width=True, key="btn_logout"):
+def hide_sidebar() -> None:
+    """Inject CSS to completely suppress Streamlit sidebar and its toggle button."""
+    st.markdown(
+        """
+        <style>
+            [data-testid="stSidebar"],
+            [data-testid="collapsedControl"],
+            [data-testid="stSidebarCollapseButton"],
+            [data-testid="stSidebarNav"],
+            section[data-testid="stSidebar"] {
+                display: none !important;
+                visibility: hidden !important;
+                width: 0 !important;
+                height: 0 !important;
+                margin: 0 !important;
+                padding: 0 !important;
+            }
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+
+def render_header_session() -> None:
+    """Render subtle session status and logout button in the top page header."""
+    hide_sidebar()
+    c_info, c_btn = st.columns([5, 1.2])
+    with c_info:
+        current_user = html.escape(str(st.session_state.get("username", "Utilisateur")))
+        st.markdown(
+            f"""
+            <div style="display: flex; align-items: center; height: 38px; color: #64748b; font-size: 0.84rem;">
+                <span style="display: inline-block; width: 7px; height: 7px; background-color: #10b981; border-radius: 50%; margin-right: 7px;"></span>
+                <span>Session : <strong style="color: #1e293b;">{current_user}</strong></span>
+            </div>
+            """,
+            unsafe_allow_html=True,
+        )
+    with c_btn:
+        if st.button("Déconnexion", key="btn_logout", help="Fermer la session", use_container_width=True):
             logout()
             st.rerun()
+
+
+# Alias for backward compatibility
+render_sidebar_session = render_header_session
 
 
 if __name__ == "__main__":
