@@ -1,8 +1,10 @@
 """Targeted unit tests for Lariviere-Live public portal security & loader."""
 
-from __future__ import annotations
-
+import io
 import os
+import sys
+import tarfile
+import time
 from unittest.mock import MagicMock, patch
 import pytest
 
@@ -16,8 +18,13 @@ from auth import (
     verify_password_hash,
 )
 from loader import (
+    _REMOTE_SHA_CACHE,
     _sanitize_message,
+    cleanup_residual_cache_dirs,
     fetch_private_app_archive,
+    get_local_commit_sha,
+    get_remote_commit_sha,
+    invalidate_cached_modules,
     load_and_run_lariviere,
     resolve_private_app_path,
 )
@@ -95,13 +102,14 @@ def test_verify_credentials_malformed_hash_fail_closed():
 
 def test_is_auth_configured_fail_closed(monkeypatch):
     """Missing auth config must fail closed."""
-    monkeypatch.setenv("LIVE_USERNAME", "")
-    monkeypatch.setenv("LIVE_PASSWORD_HASH", "")
-    assert is_auth_configured() is False
+    with patch("auth.st.secrets", {}):
+        monkeypatch.setenv("LIVE_USERNAME", "")
+        monkeypatch.setenv("LIVE_PASSWORD_HASH", "")
+        assert is_auth_configured() is False
 
-    monkeypatch.setenv("LIVE_USERNAME", "admin")
-    monkeypatch.setenv("LIVE_PASSWORD_HASH", "bad_hash")
-    assert is_auth_configured() is False
+        monkeypatch.setenv("LIVE_USERNAME", "admin")
+        monkeypatch.setenv("LIVE_PASSWORD_HASH", "bad_hash")
+        assert is_auth_configured() is False
 
 
 def test_loader_unauthenticated_blocked():
@@ -208,4 +216,222 @@ def test_logout_resets_session_state():
         assert session_dict["authenticated"] is False
         assert "username" not in session_dict
         assert "private_app_data" not in session_dict
+
+
+def _create_tarball(files: dict[str, str], prefix: str = "lariviere-ai-demo-abc1234/") -> bytes:
+    """Helper to synthesize in-memory tar.gz archives matching GitHub's format."""
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        for rel_path, content in files.items():
+            data = content.encode("utf-8")
+            ti = tarfile.TarInfo(name=f"{prefix}{rel_path}")
+            ti.size = len(data)
+            ti.mtime = int(time.time())
+            tar.addfile(ti, io.BytesIO(data))
+    return buf.getvalue()
+
+
+def test_get_remote_commit_sha_and_ttl_caching():
+    """Verify get_remote_commit_sha fetches SHA and reuses in-memory cache within TTL."""
+    _REMOTE_SHA_CACHE.clear()
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.json.return_value = {"sha": "sha_remote_111222333"}
+
+    with patch("requests.get", return_value=mock_resp) as mock_get:
+        sha1 = get_remote_commit_sha("test-repo", "feat-branch", "secret-token", ttl=60)
+        assert sha1 == "sha_remote_111222333"
+        assert mock_get.call_count == 1
+
+        # Second call within TTL should return cached SHA without making network request
+        sha2 = get_remote_commit_sha("test-repo", "feat-branch", "secret-token", ttl=60)
+        assert sha2 == "sha_remote_111222333"
+        assert mock_get.call_count == 1
+
+        # Third call with ttl=0 should bypass cache and fetch again
+        sha3 = get_remote_commit_sha("test-repo", "feat-branch", "secret-token", ttl=0)
+        assert sha3 == "sha_remote_111222333"
+        assert mock_get.call_count == 2
+
+
+def test_get_remote_commit_sha_never_leaks_token():
+    """get_remote_commit_sha must sanitize token in error messages."""
+    _REMOTE_SHA_CACHE.clear()
+    token = "ghp_VERY_SECRET_PAT_987654321"
+
+    with patch("requests.get", side_effect=Exception(f"Connection failed: https://{token}@github.com")):
+        with pytest.raises(RuntimeError) as exc_info:
+            get_remote_commit_sha("repo", "ref", token)
+
+        err_msg = str(exc_info.value)
+        assert token not in err_msg
+        assert "***TOKEN***" in err_msg
+
+
+def test_get_local_commit_sha(tmp_path):
+    """get_local_commit_sha reads .commit_sha file correctly or returns empty string."""
+    cache_dir = tmp_path / "cache"
+    cache_dir.mkdir()
+
+    # Empty/missing file
+    assert get_local_commit_sha(str(cache_dir)) == ""
+
+    # Written file
+    (cache_dir / ".commit_sha").write_text("  commit_sha_abc123  \n", encoding="utf-8")
+    assert get_local_commit_sha(str(cache_dir)) == "commit_sha_abc123"
+
+
+def test_cleanup_residual_cache_dirs(tmp_path):
+    """cleanup_residual_cache_dirs cleans only temporary and old directories."""
+    target_dir = tmp_path / "_lariviere_app"
+    target_dir.mkdir()
+    tmp1 = tmp_path / "_lariviere_app_tmp_1a2b"
+    tmp1.mkdir()
+    old1 = tmp_path / "_lariviere_app_old_3c4d"
+    old1.mkdir()
+    unrelated = tmp_path / "other_app_dir"
+    unrelated.mkdir()
+
+    cleanup_residual_cache_dirs(str(target_dir))
+
+    assert target_dir.exists()
+    assert unrelated.exists()
+    assert not tmp1.exists()
+    assert not old1.exists()
+
+
+def test_fetch_private_app_archive_atomic_swap_and_sha(tmp_path):
+    """fetch_private_app_archive extracts tarball atomically and records .commit_sha."""
+    target_dir = tmp_path / "_lariviere_app"
+    tarball_bytes = _create_tarball({
+        "app.py": "def main():\n    return 'hello from lariviere'\n",
+        "submodule/__init__.py": "# submodule\n",
+    })
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = tarball_bytes
+
+    with patch("requests.get", return_value=mock_resp):
+        res_path = fetch_private_app_archive(
+            repo="repo",
+            ref="ref",
+            token="pat_token",
+            target_dir=str(target_dir),
+            commit_sha="remote_sha_45678",
+        )
+
+    assert os.path.abspath(res_path) == str(target_dir)
+    assert (target_dir / "app.py").is_file()
+    assert (target_dir / "submodule" / "__init__.py").is_file()
+    assert (target_dir / ".commit_sha").read_text(encoding="utf-8") == "remote_sha_45678"
+
+    # Verify no residual directories remain in tmp_path
+    remaining = [p.name for p in tmp_path.iterdir()]
+    assert remaining == ["_lariviere_app"]
+
+
+def test_fetch_private_app_archive_rollback_on_corrupt_archive(tmp_path):
+    """If extraction or validation fails, previous target directory is preserved."""
+    target_dir = tmp_path / "_lariviere_app"
+    target_dir.mkdir()
+    (target_dir / "app.py").write_text("def main(): return 'original'", encoding="utf-8")
+    (target_dir / ".commit_sha").write_text("original_sha_123", encoding="utf-8")
+
+    # Corrupt archive missing app.py
+    corrupt_tar = _create_tarball({"README.md": "# No app.py here"})
+
+    mock_resp = MagicMock()
+    mock_resp.status_code = 200
+    mock_resp.content = corrupt_tar
+
+    with patch("requests.get", return_value=mock_resp):
+        with pytest.raises(RuntimeError, match="app.py manquant"):
+            fetch_private_app_archive(
+                repo="repo",
+                ref="ref",
+                token="pat_token",
+                target_dir=str(target_dir),
+                commit_sha="corrupted_new_sha",
+            )
+
+    # Rollback verification: target_dir remains with original code
+    assert target_dir.exists()
+    assert "original" in (target_dir / "app.py").read_text(encoding="utf-8")
+    assert (target_dir / ".commit_sha").read_text(encoding="utf-8") == "original_sha_123"
+
+
+def test_resolve_private_app_path_reuses_matching_sha(tmp_path):
+    """resolve_private_app_path reuses cache when SHA matches and downloads when SHA changes."""
+    cache_dir = tmp_path / "_lariviere_app"
+    cache_dir.mkdir()
+    (cache_dir / "app.py").write_text("def main(): pass", encoding="utf-8")
+    (cache_dir / ".commit_sha").write_text("sha_match_000", encoding="utf-8")
+
+    # Force resolve_private_app_path to use our test cache_dir and mock credentials
+    with patch("loader.RUNTIME_CACHE_DIR", str(cache_dir)), \
+         patch("loader.get_config", side_effect=lambda k, d="": {
+             "GITHUB_REPO": "test-repo",
+             "GITHUB_REF": "main",
+             "GITHUB_TOKEN": "token_123",
+             "LARIVIERE_LOCAL_PATH": "",
+         }.get(k, d)), \
+         patch("loader.os.path.isdir", side_effect=lambda p: False if "LariviereAI" in p else os.path.isdir(p)), \
+         patch("loader.fetch_private_app_archive") as mock_fetch:
+
+        # 1. Matching SHA: do NOT download
+        with patch("loader.get_remote_commit_sha", return_value="sha_match_000"):
+            path = resolve_private_app_path()
+            assert path == str(cache_dir)
+            mock_fetch.assert_not_called()
+
+        # 2. Changed SHA: download new version
+        with patch("loader.get_remote_commit_sha", return_value="sha_new_111"), \
+             patch("loader.invalidate_cached_modules") as mock_invalidate:
+            mock_fetch.return_value = str(cache_dir)
+            path = resolve_private_app_path()
+            assert path == str(cache_dir)
+            mock_fetch.assert_called_once_with(
+                repo="test-repo",
+                ref="main",
+                token="token_123",
+                target_dir=str(cache_dir),
+                commit_sha="sha_new_111",
+            )
+            mock_invalidate.assert_called_once_with(str(cache_dir))
+
+
+def test_invalidate_cached_modules_targeted(tmp_path):
+    """invalidate_cached_modules purges target_dir modules but NEVER third-party packages."""
+    target_dir = str(tmp_path / "_lariviere_app")
+    os.makedirs(target_dir, exist_ok=True)
+
+    file_inside = os.path.join(target_dir, "feature.py")
+    mod_inside = MagicMock(__file__=file_inside)
+    app_mod = MagicMock(__file__=os.path.join(target_dir, "app.py"))
+    streamlit_mod = MagicMock(__file__="C:/Python/lib/site-packages/streamlit/__init__.py")
+    requests_mod = MagicMock(__file__="C:/Python/lib/site-packages/requests/__init__.py")
+    auth_mod = MagicMock(__file__="D:/Lariviere-Live/auth.py")
+
+    sys.modules["cached_feature"] = mod_inside
+    sys.modules["app"] = app_mod
+    sys.modules["streamlit"] = streamlit_mod
+    sys.modules["requests"] = requests_mod
+    sys.modules["auth"] = auth_mod
+
+    try:
+        purged = invalidate_cached_modules(target_dir)
+
+        assert "cached_feature" in purged
+        assert "app" in purged
+        assert "cached_feature" not in sys.modules
+        assert "app" not in sys.modules
+
+        # Protected modules must remain
+        assert "streamlit" in sys.modules
+        assert "requests" in sys.modules
+        assert "auth" in sys.modules
+    finally:
+        sys.modules.pop("cached_feature", None)
+
 
