@@ -30,7 +30,7 @@ from auth import get_config, is_authenticated
 LOGGER = logging.getLogger(__name__)
 
 DEFAULT_REPO = "cdurand42/lariviere-ai-demo"
-DEFAULT_REF = "feat/streamlit-auth-gateway"
+DEFAULT_REF = "main"
 RUNTIME_CACHE_DIR = "_lariviere_app"
 COMMIT_SHA_FILENAME = ".commit_sha"
 DEFAULT_SHA_CACHE_TTL_SECONDS = 60
@@ -352,6 +352,7 @@ def resolve_private_app_path() -> str:
 
     # If cache exists and SHA matches, reuse cached extraction
     if os.path.isfile(app_entry) and os.path.getsize(app_entry) > 0 and local_sha and local_sha == remote_sha:
+        LOGGER.info("PRIVATE_APP repo=%s ref=%s commit=%s source=cache", repo, ref, remote_sha[:7])
         return target_dir
 
     # Otherwise, download new archive atomically and invalidate python module cache
@@ -363,6 +364,7 @@ def resolve_private_app_path() -> str:
         commit_sha=remote_sha,
     )
     invalidate_cached_modules(target_dir)
+    LOGGER.info("PRIVATE_APP repo=%s ref=%s commit=%s source=download", repo, ref, remote_sha[:7])
     return extracted_path
 
 
